@@ -72,6 +72,7 @@ import org.eclipse.jdt.ls.core.internal.managers.FormatterManager;
 import org.eclipse.jdt.ls.core.internal.managers.ProjectsManager;
 import org.eclipse.jdt.ls.core.internal.preferences.PreferenceManager;
 import org.eclipse.jdt.ls.core.internal.preferences.Preferences;
+import org.eclipse.jdt.ls.core.internal.services.CustomServicesExtensionPoint;
 import org.eclipse.lsp4j.CodeAction;
 import org.eclipse.lsp4j.CodeActionKind;
 import org.eclipse.lsp4j.CodeActionOptions;
@@ -127,6 +128,7 @@ import org.eclipse.lsp4j.WorkspaceEdit;
 import org.eclipse.lsp4j.WorkspaceSymbolParams;
 import org.eclipse.lsp4j.jsonrpc.CancelChecker;
 import org.eclipse.lsp4j.jsonrpc.CompletableFutures;
+import org.eclipse.lsp4j.jsonrpc.Endpoint;
 import org.eclipse.lsp4j.jsonrpc.messages.Either;
 import org.eclipse.lsp4j.jsonrpc.services.JsonDelegate;
 import org.eclipse.lsp4j.services.LanguageServer;
@@ -137,7 +139,7 @@ import org.eclipse.lsp4j.services.WorkspaceService;
  * @author Gorkem Ercan
  *
  */
-public class JDTLanguageServer implements LanguageServer, TextDocumentService, WorkspaceService, JavaProtocolExtensions {
+public class JDTLanguageServer implements LanguageServer, TextDocumentService, WorkspaceService, JavaProtocolExtensions, Endpoint {
 
 	public static final String JAVA_LSP_JOIN_ON_COMPLETION = "java.lsp.joinOnCompletion";
 	/**
@@ -564,6 +566,7 @@ public class JDTLanguageServer implements LanguageServer, TextDocumentService, W
 		return computeAsync((monitor) -> handler.findReferences(params, monitor));
 	}
 
+	@Override
 	public 	CompletableFuture<List<? extends Location>> findLinks(FindLinksParams params) {
 		logInfo(">> java/findLinks");
 		return computeAsync((monitor) -> FindLinksHandler.findLinks(params.type, params.position, monitor));
@@ -955,6 +958,22 @@ public class JDTLanguageServer implements LanguageServer, TextDocumentService, W
 		} catch (InterruptedException e) {
 			JavaLanguageServerPlugin.logException(e.getMessage(), e);
 		}
+	}
+
+	/* (non-Javadoc)
+	 * @see org.eclipse.lsp4j.jsonrpc.Endpoint#request(java.lang.String, java.lang.Object)
+	 */
+	@Override
+	public CompletableFuture<?> request(String method, Object parameter) {
+		return CustomServicesExtensionPoint.getInstance().getEndpoint().request(method, parameter);
+	}
+
+	/* (non-Javadoc)
+	 * @see org.eclipse.lsp4j.jsonrpc.Endpoint#notify(java.lang.String, java.lang.Object)
+	 */
+	@Override
+	public void notify(String method, Object parameter) {
+		CustomServicesExtensionPoint.getInstance().getEndpoint().notify(method, parameter);
 	}
 
 }

@@ -59,6 +59,7 @@ import org.eclipse.jdt.ls.core.internal.managers.ContentProviderManager;
 import org.eclipse.jdt.ls.core.internal.managers.DigestStore;
 import org.eclipse.jdt.ls.core.internal.managers.ProjectsManager;
 import org.eclipse.jdt.ls.core.internal.preferences.PreferenceManager;
+import org.eclipse.jdt.ls.core.internal.services.MyBuilder;
 import org.eclipse.lsp4j.jsonrpc.Launcher;
 import org.eclipse.lsp4j.jsonrpc.MessageConsumer;
 import org.osgi.framework.Bundle;
@@ -300,7 +301,7 @@ public class JavaLanguageServerPlugin extends Plugin {
 				InputStream in = Channels.newInputStream(socketChannel);
 				OutputStream out = Channels.newOutputStream(socketChannel);
 				Function<MessageConsumer, MessageConsumer> messageConsumer = it -> it;
-				launcher = Launcher.createIoLauncher(protocol, JavaLanguageClient.class, in, out, executorService, messageConsumer);
+				launcher = MyBuilder.createIoLauncher(protocol, JavaLanguageClient.class, in, out, executorService, messageConsumer);
 			} catch (InterruptedException | ExecutionException e) {
 				throw new RuntimeException("Error when opening a socket channel at " + host + ":" + port + ".", e);
 			}
@@ -314,7 +315,7 @@ public class JavaLanguageServerPlugin extends Plugin {
 			} else {
 				wrapper = new ParentProcessWatcher(this.languageServer);
 			}
-			launcher = Launcher.createLauncher(protocol, JavaLanguageClient.class, in, out, executorService, wrapper);
+			launcher = MyBuilder.createLauncher(protocol, JavaLanguageClient.class, in, out, executorService, wrapper);
 		}
 		protocol.connectClient(launcher.getRemoteProxy());
 		launcher.startListening();
