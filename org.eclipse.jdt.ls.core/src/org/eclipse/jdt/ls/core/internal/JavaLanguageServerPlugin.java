@@ -54,6 +54,7 @@ import org.eclipse.jdt.internal.core.manipulation.MembersOrderPreferenceCacheCom
 import org.eclipse.jdt.internal.corext.codemanipulation.CodeGenerationSettingsConstants;
 import org.eclipse.jdt.ls.core.internal.JavaClientConnection.JavaLanguageClient;
 import org.eclipse.jdt.ls.core.internal.contentassist.TypeFilter;
+import org.eclipse.jdt.ls.core.internal.contributedservices.JDTLauncher;
 import org.eclipse.jdt.ls.core.internal.handlers.JDTLanguageServer;
 import org.eclipse.jdt.ls.core.internal.managers.ContentProviderManager;
 import org.eclipse.jdt.ls.core.internal.managers.DigestStore;
@@ -300,7 +301,7 @@ public class JavaLanguageServerPlugin extends Plugin {
 				InputStream in = Channels.newInputStream(socketChannel);
 				OutputStream out = Channels.newOutputStream(socketChannel);
 				Function<MessageConsumer, MessageConsumer> messageConsumer = it -> it;
-				launcher = Launcher.createIoLauncher(protocol, JavaLanguageClient.class, in, out, executorService, messageConsumer);
+				launcher = JDTLauncher.createIoLauncher(protocol, JavaLanguageClient.class, in, out, executorService, messageConsumer);
 			} catch (InterruptedException | ExecutionException e) {
 				throw new RuntimeException("Error when opening a socket channel at " + host + ":" + port + ".", e);
 			}
@@ -314,7 +315,7 @@ public class JavaLanguageServerPlugin extends Plugin {
 			} else {
 				wrapper = new ParentProcessWatcher(this.languageServer);
 			}
-			launcher = Launcher.createLauncher(protocol, JavaLanguageClient.class, in, out, executorService, wrapper);
+			launcher = JDTLauncher.createLauncher(protocol, JavaLanguageClient.class, in, out, executorService, wrapper);
 		}
 		protocol.connectClient(launcher.getRemoteProxy());
 		launcher.startListening();
