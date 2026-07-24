@@ -159,6 +159,7 @@ public class MavenProjectImporter extends AbstractProjectImporter {
 
 	@Override
 	public void importToWorkspace(IProgressMonitor monitor) throws CoreException, OperationCanceledException {
+		long tImportAll = System.currentTimeMillis();
 		JavaLanguageServerPlugin.logInfo(IMPORTING_MAVEN_PROJECTS);
 		MavenConfigurationImpl configurationImpl = (MavenConfigurationImpl)MavenPlugin.getMavenConfiguration();
 		configurationImpl.setDownloadSources(JavaLanguageServerPlugin.getPreferencesManager().getPreferences().isMavenDownloadSources());
@@ -167,15 +168,21 @@ public class MavenProjectImporter extends AbstractProjectImporter {
 		configurationImpl.setDefaultMojoExecutionAction(action);
 		SubMonitor subMonitor = SubMonitor.convert(monitor, 105);
 		subMonitor.setTaskName(IMPORTING_MAVEN_PROJECTS);
+		long tScan = System.currentTimeMillis();
 		Set<MavenProjectInfo> files = getMavenProjectInfo(subMonitor.split(5));
+		System.err.println("[MavenProjectImporter#getMavenProjectInfo] " + (System.currentTimeMillis() - tScan) + " ms → " + files.size() + " projects");
 		IWorkspaceRoot root = ResourcesPlugin.getWorkspace().getRoot();
 		Collection<IProject> projects = new LinkedHashSet<>();
 		Collection<MavenProjectInfo> toImport = new LinkedHashSet<>();
 		Collection<java.nio.file.Path> toUpdateDigest = new LinkedHashSet<>();
 		long lastWorkspaceStateSaved = getLastWorkspaceStateModified();
 		Set<String> artifactIds = new LinkedHashSet<>();
+		int importIndex = 0;
+		int totalFiles = files.size();
 		//Separate existing projects from new ones
 		for (MavenProjectInfo projectInfo : files) {
+			importIndex++;
+			System.err.println("[MavenProjectImporter#importToWorkspace] (" + importIndex + "/" + totalFiles + ") " + projectInfo.getPomFile());
 			File pom = projectInfo.getPomFile();
 			IContainer container = root.getContainerForLocation(new Path(pom.getAbsolutePath()));
 			// getContainerForLocation() will return the nearest container for the given path,
@@ -257,6 +264,7 @@ public class MavenProjectImporter extends AbstractProjectImporter {
 		subMonitor.setWorkRemaining(20);
 		updateProjects(projects, lastWorkspaceStateSaved, subMonitor.split(20));
 		subMonitor.done();
+		System.err.println("[MavenProjectImporter#importToWorkspace] TOTAL: " + (System.currentTimeMillis() - tImportAll) + " ms (toImport=" + toImport.size() + " existing=" + projects.size() + ")");
 	}
 
 	private File getParentPomFile(MavenProjectInfo projectInfo) {

@@ -18,6 +18,18 @@
       </application>
    </extension>
    <extension
+         id="JDTLSBenchmark"
+         point="org.eclipse.core.runtime.applications">
+      <application
+            cardinality="singleton-global"
+            thread="main"
+            visible="true">
+         <run
+               class="org.eclipse.jdt.ls.core.internal.benchmark.JDTLSProjectLoadBenchmark">
+         </run>
+      </application>
+   </extension>
+   <extension
          id="product"
          point="org.eclipse.core.runtime.products">
       <product

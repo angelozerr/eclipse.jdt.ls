@@ -115,7 +115,9 @@ public abstract class ProjectsManager implements ISaveParticipant, IProjectsMana
 	public void initializeProjects(final Collection<IPath> rootPaths, IProgressMonitor monitor) throws CoreException, OperationCanceledException {
 		if (!preferenceManager.getClientPreferences().skipProjectConfiguration()) {
 			SubMonitor subMonitor = SubMonitor.convert(monitor, 100);
+			long tClean = System.currentTimeMillis();
 			cleanInvalidProjects(rootPaths, subMonitor.split(20));
+			System.err.println("[ProjectsManager#initializeProjects] cleanInvalidProjects: " + (System.currentTimeMillis() - tClean) + " ms");
 			if (rootPaths.isEmpty() && !ProjectsManager.getDefaultProject().exists()) {
 				ProjectsManager.createJavaProject(ProjectsManager.getDefaultProject(), subMonitor.split(10));
 				ProjectsManager.cleanupResources(ProjectsManager.getDefaultProject());
@@ -123,11 +125,15 @@ public abstract class ProjectsManager implements ISaveParticipant, IProjectsMana
 			Collection<IPath> projectConfigurations = preferenceManager.getPreferences().getProjectConfigurations();
 			if (projectConfigurations == null) {
 				// old way to import project
+				long tImport = System.currentTimeMillis();
 				importProjects(rootPaths, subMonitor.split(70));
+				System.err.println("[ProjectsManager#initializeProjects] importProjects: " + (System.currentTimeMillis() - tImport) + " ms");
 			} else {
 				importProjectsFromConfigurationFiles(rootPaths, projectConfigurations, monitor);
 			}
+			long tEncoding = System.currentTimeMillis();
 			updateEncoding(monitor);
+			System.err.println("[ProjectsManager#initializeProjects] updateEncoding: " + (System.currentTimeMillis() - tEncoding) + " ms");
 			reportProjectsStatus();
 			subMonitor.done();
 		}
@@ -155,6 +161,7 @@ public abstract class ProjectsManager implements ISaveParticipant, IProjectsMana
 	protected void importProjects(Collection<IPath> rootPaths, IProgressMonitor monitor) throws CoreException, OperationCanceledException {
 		SubMonitor subMonitor = SubMonitor.convert(monitor, rootPaths.size() * 100);
 		MultiStatus importStatusCollection = new MultiStatus(IConstants.PLUGIN_ID, -1, "Failed to import projects", null);
+		boolean useFastRootCheck = Boolean.parseBoolean(System.getProperty("jdt.ls.import.fastRootCheck", "true"));
 
 		ProgressiveProjectReporter reporter = new ProgressiveProjectReporter(client);
 		reporter.start();
@@ -162,12 +169,28 @@ public abstract class ProjectsManager implements ISaveParticipant, IProjectsMana
 		try {
 			for (IPath rootPath : rootPaths) {
 				File rootFolder = rootPath.toFile();
+				Set<String> skipImporters = useFastRootCheck ? computeSkippableImporters(rootFolder) : Collections.emptySet();
 				try {
 					for (IProjectImporter importer : importers()) {
+						String importerName = importer.getClass().getSimpleName();
+						if (skipImporters.contains(importerName)) {
+							System.err.println("[ProjectsManager#importProjects] Skipping " + importerName + " (fast root check)");
+							continue;
+						}
 						importer.initialize(rootFolder);
-						if (importer.applies(subMonitor.split(1))) {
+						long tApplies = System.currentTimeMillis();
+						boolean applies = importer.applies(subMonitor.split(1));
+						long appliesTime = System.currentTimeMillis() - tApplies;
+						String slowApplies = appliesTime > 500 ? " (SLOW)" : "";
+						System.err.println("[ProjectsManager#importProjects] " + importerName + ".applies(): " + appliesTime + " ms → " + applies + slowApplies);
+						if (applies) {
+							long tImport = System.currentTimeMillis();
 							importer.importToWorkspace(subMonitor.split(70));
+							long importTime = System.currentTimeMillis() - tImport;
+							String slowImport = importTime > 5000 ? " (SLOW)" : "";
+							System.err.println("[ProjectsManager#importProjects] " + importerName + ".importToWorkspace(): " + importTime + " ms" + slowImport);
 							if (importer.isResolved(rootFolder)) {
+								System.err.println("[ProjectsManager#importProjects] " + importerName + " resolved, skipping remaining importers");
 								break;
 							}
 						}
@@ -185,6 +208,24 @@ public abstract class ProjectsManager implements ISaveParticipant, IProjectsMana
 		if (!importStatusCollection.isOK()) {
 			throw new CoreException(importStatusCollection);
 		}
+	}
+
+	private Set<String> computeSkippableImporters(File rootFolder) {
+		long t = System.currentTimeMillis();
+		boolean hasRootPom = new File(rootFolder, "pom.xml").exists();
+		boolean hasRootGradle = new File(rootFolder, "build.gradle").exists()
+				|| new File(rootFolder, "settings.gradle").exists()
+				|| new File(rootFolder, "build.gradle.kts").exists()
+				|| new File(rootFolder, "settings.gradle.kts").exists();
+		Set<String> skip = new HashSet<>();
+		if (hasRootPom && !hasRootGradle) {
+			skip.add("GradleProjectImporter");
+		} else if (hasRootGradle && !hasRootPom) {
+			skip.add("MavenProjectImporter");
+		}
+		System.err.println("[ProjectsManager#computeSkippableImporters] pom.xml=" + hasRootPom + " gradle=" + hasRootGradle
+				+ " → skip=" + skip + " " + (System.currentTimeMillis() - t) + " ms");
+		return skip;
 	}
 
 	protected void importProjectsFromConfigurationFiles(Collection<IPath> rootPaths, Collection<IPath> projectConfigurations, IProgressMonitor monitor) throws OperationCanceledException, CoreException {

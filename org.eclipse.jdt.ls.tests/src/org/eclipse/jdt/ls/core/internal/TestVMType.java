@@ -47,13 +47,15 @@ public class TestVMType extends AbstractVMInstallType {
 
 	public static void setTestJREAsDefault(String vmId) throws CoreException {
 		IVMInstallType vmInstallType = JavaRuntime.getVMInstallType(VMTYPE_ID);
-		IVMInstall testVMInstall = vmInstallType.findVMInstall(vmId);
-		if (!testVMInstall.equals(JavaRuntime.getDefaultVMInstall())) {
-			// set the 21 test JRE as the new default JRE
-			JavaRuntime.setDefaultVMInstall(testVMInstall, new NullProgressMonitor());
-			Hashtable<String, String> options = JavaCore.getOptions();
-			JavaCore.setComplianceOptions(vmId, options);
-			JavaCore.setOptions(options);
+		if (vmInstallType != null) {
+			IVMInstall testVMInstall = vmInstallType.findVMInstall(vmId);
+			if (!testVMInstall.equals(JavaRuntime.getDefaultVMInstall())) {
+				// set the 21 test JRE as the new default JRE
+				JavaRuntime.setDefaultVMInstall(testVMInstall, new NullProgressMonitor());
+				Hashtable<String, String> options = JavaCore.getOptions();
+				JavaCore.setComplianceOptions(vmId, options);
+				JavaCore.setOptions(options);
+			}
 		}
 		JDTUtils.setCompatibleVMs(VMTYPE_ID);
 	}
