@@ -77,6 +77,8 @@ import org.eclipse.lsp4j.DocumentOnTypeFormattingOptions;
 import org.eclipse.lsp4j.DocumentOnTypeFormattingParams;
 import org.eclipse.lsp4j.DocumentRangeFormattingParams;
 import org.eclipse.lsp4j.DocumentSymbol;
+import org.eclipse.lsp4j.CodeLens;
+import org.eclipse.lsp4j.CodeLensParams;
 import org.eclipse.lsp4j.DocumentSymbolParams;
 import org.eclipse.lsp4j.FoldingRange;
 import org.eclipse.lsp4j.FoldingRangeRequestParams;
@@ -86,6 +88,7 @@ import org.eclipse.lsp4j.InitializeParams;
 import org.eclipse.lsp4j.InitializeResult;
 import org.eclipse.lsp4j.Location;
 import org.eclipse.lsp4j.LocationLink;
+import org.eclipse.lsp4j.ReferenceParams;
 import org.eclipse.lsp4j.SelectionRange;
 import org.eclipse.lsp4j.SelectionRangeParams;
 import org.eclipse.lsp4j.SemanticTokens;
@@ -95,6 +98,10 @@ import org.eclipse.lsp4j.SymbolInformation;
 import org.eclipse.lsp4j.TextDocumentIdentifier;
 import org.eclipse.lsp4j.TextEdit;
 import org.eclipse.lsp4j.TypeDefinitionParams;
+import org.eclipse.lsp4j.TypeHierarchyItem;
+import org.eclipse.lsp4j.TypeHierarchyPrepareParams;
+import org.eclipse.lsp4j.TypeHierarchySubtypesParams;
+import org.eclipse.lsp4j.TypeHierarchySupertypesParams;
 import org.eclipse.lsp4j.jsonrpc.messages.Either;
 import org.eclipse.lsp4j.jsonrpc.services.JsonDelegate;
 import org.eclipse.lsp4j.services.LanguageServer;
@@ -109,6 +116,7 @@ public class SyntaxLanguageServer extends BaseJDTLanguageServer implements Langu
 	private ContentProviderManager contentProviderManager;
 	private ProjectsManager projectsManager;
 	private PreferenceManager preferenceManager;
+	private final FastIndexService fastIndexService = new FastIndexService();
 	private Job shutdownJob = new Job("Shutdown...") {
 
 		@Override
@@ -149,6 +157,7 @@ public class SyntaxLanguageServer extends BaseJDTLanguageServer implements Langu
 	@Override
 	public CompletableFuture<Object> shutdown() {
 		logInfo(">> shutdown");
+		fastIndexService.dispose();
 		return computeAsync((monitor) -> {
 			shutdownJob.schedule();
 			shutdownReceived = true;
@@ -257,6 +266,10 @@ public class SyntaxLanguageServer extends BaseJDTLanguageServer implements Langu
 
 		this.client.sendStatus(ServiceStatus.Started, "LightWeightServiceReady");
 		logInfo(">> initialization job finished");
+
+		fastIndexService.buildIndexAsync().thenRun(() -> {
+			logInfo(">> fast index ready, references and type hierarchy available");
+		});
 	}
 
 	@Override
@@ -462,6 +475,43 @@ public class SyntaxLanguageServer extends BaseJDTLanguageServer implements Langu
 	public CompletableFuture<List<? extends DocumentHighlight>> documentHighlight(DocumentHighlightParams position) {
 		logInfo(">> document/documentHighlight");
 		return computeAsync((monitor) -> DocumentHighlightHandler.documentHighlight(position, monitor));
+	}
+
+	@Override
+	public CompletableFuture<List<? extends Location>> references(ReferenceParams params) {
+		logInfo(">> document/references");
+		return computeAsync((monitor) -> FastReferencesHandler.references(params, fastIndexService));
+	}
+
+	@Override
+	public CompletableFuture<List<TypeHierarchyItem>> prepareTypeHierarchy(TypeHierarchyPrepareParams params) {
+		logInfo(">> document/prepareTypeHierarchy");
+		return computeAsync((monitor) -> FastTypeHierarchyHandler.prepare(params, fastIndexService));
+	}
+
+	@Override
+	public CompletableFuture<List<TypeHierarchyItem>> typeHierarchySupertypes(TypeHierarchySupertypesParams params) {
+		logInfo(">> document/typeHierarchySupertypes");
+		return computeAsync((monitor) -> FastTypeHierarchyHandler.supertypes(params, fastIndexService));
+	}
+
+	@Override
+	public CompletableFuture<List<TypeHierarchyItem>> typeHierarchySubtypes(TypeHierarchySubtypesParams params) {
+		logInfo(">> document/typeHierarchySubtypes");
+		return computeAsync((monitor) -> FastTypeHierarchyHandler.subtypes(params, fastIndexService));
+	}
+
+	@Override
+	public CompletableFuture<List<? extends CodeLens>> codeLens(CodeLensParams params) {
+		logInfo(">> document/codeLens");
+		return computeAsync((monitor) -> FastCodeLensHandler.codeLens(
+				params.getTextDocument().getUri(), fastIndexService, preferenceManager));
+	}
+
+	@Override
+	public CompletableFuture<CodeLens> resolveCodeLens(CodeLens unresolved) {
+		logInfo(">> codeLens/resolve");
+		return computeAsync((monitor) -> FastCodeLensHandler.resolve(unresolved, fastIndexService));
 	}
 
 	@Override

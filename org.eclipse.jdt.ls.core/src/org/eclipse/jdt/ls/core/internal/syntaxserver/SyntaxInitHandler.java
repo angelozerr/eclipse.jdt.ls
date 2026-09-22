@@ -31,6 +31,7 @@ import org.eclipse.jdt.ls.core.internal.handlers.SemanticTokensHandler;
 import org.eclipse.jdt.ls.core.internal.managers.ProjectsManager;
 import org.eclipse.jdt.ls.core.internal.preferences.PreferenceManager;
 import org.eclipse.lsp4j.DocumentFilter;
+import org.eclipse.lsp4j.CodeLensOptions;
 import org.eclipse.lsp4j.InitializeResult;
 import org.eclipse.lsp4j.SaveOptions;
 import org.eclipse.lsp4j.SemanticTokensServerFull;
@@ -78,6 +79,9 @@ public class SyntaxInitHandler extends BaseInitHandler {
 		if (!preferenceManager.getClientPreferences().isDocumentHighlightDynamicRegistered()) {
 			capabilities.setDocumentHighlightProvider(Boolean.TRUE);
 		}
+		capabilities.setReferencesProvider(Boolean.TRUE);
+		capabilities.setTypeHierarchyProvider(Boolean.TRUE);
+		capabilities.setCodeLensProvider(new CodeLensOptions(true));
 		TextDocumentSyncOptions textDocumentSyncOptions = new TextDocumentSyncOptions();
 		textDocumentSyncOptions.setOpenClose(Boolean.TRUE);
 		textDocumentSyncOptions.setSave(new SaveOptions(Boolean.TRUE));
