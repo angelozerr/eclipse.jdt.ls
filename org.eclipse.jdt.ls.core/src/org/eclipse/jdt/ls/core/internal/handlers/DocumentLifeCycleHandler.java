@@ -25,9 +25,10 @@ import org.eclipse.jdt.ls.core.internal.JavaClientConnection;
 import org.eclipse.jdt.ls.core.internal.JavaLanguageServerPlugin;
 import org.eclipse.jdt.ls.core.internal.ResourceUtils;
 import org.eclipse.jdt.ls.core.internal.managers.InvisibleProjectImporter;
-import org.eclipse.jdt.ls.core.internal.managers.ondemand.OnDemandImportManager;
 import org.eclipse.jdt.ls.core.internal.managers.ProjectsManager;
+import org.eclipse.jdt.ls.core.internal.managers.ondemand.OnDemandImportManager;
 import org.eclipse.jdt.ls.core.internal.preferences.PreferenceManager;
+import org.eclipse.lsp4j.DidOpenTextDocumentParams;
 
 public class DocumentLifeCycleHandler extends BaseDocumentLifeCycleHandler {
 
@@ -42,6 +43,7 @@ public class DocumentLifeCycleHandler extends BaseDocumentLifeCycleHandler {
 		super(preferenceManager, delayValidation);
 		this.connection = connection;
 		this.onDemandImportManager = onDemandImportManager;
+		this.onDemandImportManager.setDidOpenReplayer(this::didOpen);
 	}
 
 	@Override
@@ -55,17 +57,26 @@ public class DocumentLifeCycleHandler extends BaseDocumentLifeCycleHandler {
 	}
 
 	@Override
+	public void didOpen(DidOpenTextDocumentParams params) {
+		if (onDemandImportManager.isActive()) {
+			String uri = params.getTextDocument().getUri();
+			IFile resource = JDTUtils.findFile(uri);
+			if (resource == null || !resource.getProject().isOpen()
+					|| ProjectsManager.getDefaultProject().equals(resource.getProject())) {
+				onDemandImportManager.scheduleOnDemandImport(uri, params);
+			}
+		}
+		super.didOpen(params);
+	}
+
+	@Override
 	public ICompilationUnit resolveCompilationUnit(String uri) {
 		ICompilationUnit unit = null;
 		IFile resource = JDTUtils.findFile(uri);
-		// In on-demand mode, when a Java file is opened and its project is not
-		// yet imported, force the import of the project so the file can be resolved.
-		if ((resource == null || !resource.getProject().isOpen()) && onDemandImportManager.tryOnDemandImport(uri, new NullProgressMonitor())) {
-			resource = JDTUtils.findFile(uri);
-		}
-		if (resource != null) { // Open the files already managed by the jdt workspace.
+		if (resource != null && resource.getProject().isOpen()
+				&& !ProjectsManager.getDefaultProject().equals(resource.getProject())) {
 			unit = JDTUtils.resolveCompilationUnit(resource);
-		} else { // Open the standalone files.
+		} else {
 			IPath filePath = ResourceUtils.canonicalFilePathFromURI(uri);
 			if (filePath != null) {
 				Collection<IPath> rootPaths = preferenceManager.getPreferences().getRootPaths();

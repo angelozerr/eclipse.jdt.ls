@@ -18,17 +18,25 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.jdt.core.IClassFile;
+import org.eclipse.jdt.core.IPackageFragment;
 import org.eclipse.jdt.ls.core.internal.EventNotification;
 import org.eclipse.jdt.ls.core.internal.EventType;
 import org.eclipse.jdt.ls.core.internal.IProjectImporter;
 import org.eclipse.jdt.ls.core.internal.JavaClientConnection.JavaLanguageClient;
+import org.eclipse.jdt.ls.core.internal.JDTUtils;
 import org.eclipse.jdt.ls.core.internal.JavaLanguageServerPlugin;
 import org.eclipse.jdt.ls.core.internal.ProjectUtils;
 import org.eclipse.jdt.ls.core.internal.handlers.DocumentLifeCycleHandler;
@@ -46,7 +54,7 @@ import org.eclipse.jdt.ls.core.internal.managers.ProjectsManager;
  *   <li>At startup, {@link #initialize} registers importers that support
  *       on-demand mode. No project scanning or import happens.</li>
  *   <li>On each {@code didOpen}, {@link DocumentLifeCycleHandler} calls
- *       {@link #tryOnDemandImport}. Each importer lazily creates its
+ *       {@link #scheduleOnDemandImport}. Each importer lazily creates its
  *       module index on first use, walks up from the file to find
  *       the nearest build file, and imports the module if needed.</li>
  *   <li>At shutdown, {@link #closeProjectsOnShutdown} closes all imported
@@ -66,6 +74,16 @@ public class OnDemandImportManager {
 	 * Each importer lazily creates its module index on first use.
 	 */
 	private final List<IProjectImporter> importers = new ArrayList<>();
+
+	private final ModuleScanner moduleScanner = new ModuleScanner();
+
+	private static final List<IClassFileSourceStrategy> STRATEGIES = List.of(
+			new ScannedModulesStrategy(),
+			new SourceAttachmentStrategy(),
+			new JarPathStrategy()
+	);
+
+	private final Set<String> importingUris = ConcurrentHashMap.newKeySet();
 
 	private Collection<IPath> rootPaths;
 
@@ -103,6 +121,21 @@ public class OnDemandImportManager {
 		JavaLanguageServerPlugin.logInfo("On-demand mode initialized: "
 				+ importers.size() + " importer(s) registered for "
 				+ rootPaths.size() + " root path(s)");
+
+		// Start background scan of all workspace modules for "Go to Definition" support
+		for (IPath rootPath : rootPaths) {
+			Job scanJob = Job.create("Scan workspace modules", monitor -> {
+				try {
+					moduleScanner.scan(rootPath.toFile().toPath());
+				} catch (RuntimeException e) {
+					JavaLanguageServerPlugin.logException("Failed to scan workspace modules", e);
+				}
+				return Status.OK_STATUS;
+			});
+			scanJob.setPriority(Job.LONG);
+			scanJob.setSystem(true);
+			scanJob.schedule();
+		}
 	}
 
 	/**
@@ -112,33 +145,104 @@ public class OnDemandImportManager {
 		return active;
 	}
 
+	// ── Source resolution ─────────────────────────────────────────────────
+
+	/**
+	 * Finds the workspace source file for the given class file without importing.
+	 *
+	 * <p>Used by workspace symbol search (Ctrl+T) to return source locations
+	 * instead of decompiled class locations. The actual import happens later
+	 * via {@code textDocument/didOpen} when the user navigates to the result.</p>
+	 *
+	 * @param classFile the class file to resolve
+	 * @return the source file URI, or {@code null} if not found in workspace
+	 */
+	public String findSourceForClassFile(IClassFile classFile) {
+		if (!active) {
+			return null;
+		}
+		try {
+			IPackageFragment pkg = (IPackageFragment) classFile.getParent();
+			String pkgPath = pkg.getElementName().replace('.', '/');
+			String cfName = classFile.getElementName();
+			int dollar = cfName.indexOf('$');
+			String sourceName = (dollar > 0 ? cfName.substring(0, dollar) : cfName.replace(".class", "")) + ".java";
+			String relativePath = pkgPath.isEmpty() ? sourceName : pkgPath + "/" + sourceName;
+
+			for (IClassFileSourceStrategy strategy : STRATEGIES) {
+				Path sourceFile = strategy.findSource(classFile, relativePath, moduleScanner);
+				if (sourceFile != null) {
+					return sourceFile.toUri().toString();
+				}
+			}
+		} catch (Exception e) {
+			JavaLanguageServerPlugin.logException("Failed to find source for class file", e);
+		}
+		return null;
+	}
+
 	// ── On-demand import ────────────────────────────────────────────────
 
 	/**
-	 * Attempts to import the module containing the given file URI.
+	 * Schedules an asynchronous import of the module containing the given file URI.
 	 *
-	 * <p>Called from {@link DocumentLifeCycleHandler#resolveCompilationUnit}
-	 * on each {@code textDocument/didOpen}. Tries each registered importer
-	 * in order; the first one whose module index recognizes the file
-	 * handles the import.</p>
+	 * <p>Called from {@link DocumentLifeCycleHandler#didOpen} when a file's
+	 * project is not yet imported. The file opens immediately in syntax mode
+	 * (fake compilation unit). When the background import completes,
+	 * {@code didOpen} is replayed so the file transitions to standard mode.</p>
+	 *
+	 * @param uri the file URI that was opened
+	 * @param params the original didOpen params, replayed after import
+	 */
+	public void scheduleOnDemandImport(String uri, org.eclipse.lsp4j.DidOpenTextDocumentParams params) {
+		if (!active) {
+			return;
+		}
+		if (!importingUris.add(uri)) {
+			return;
+		}
+		Job importJob = Job.create("Importing project for " + uri, monitor -> {
+			try {
+				if (tryOnDemandImport(uri, monitor)) {
+					if (didOpenReplayer != null) {
+						didOpenReplayer.accept(params);
+					}
+				}
+			} finally {
+				importingUris.remove(uri);
+			}
+			return Status.OK_STATUS;
+		});
+		importJob.setPriority(Job.BUILD);
+		importJob.schedule();
+	}
+
+	private java.util.function.Consumer<org.eclipse.lsp4j.DidOpenTextDocumentParams> didOpenReplayer;
+
+	/**
+	 * Sets the callback that replays {@code didOpen} after a successful
+	 * on-demand import. This transitions the file from syntax mode
+	 * (fake compilation unit) to standard mode with full diagnostics.
+	 */
+	public void setDidOpenReplayer(java.util.function.Consumer<org.eclipse.lsp4j.DidOpenTextDocumentParams> replayer) {
+		this.didOpenReplayer = replayer;
+	}
+
+	/**
+	 * Synchronously imports the module containing the given file URI.
 	 *
 	 * @param uri the file URI that was opened
 	 * @param monitor progress monitor
-	 * @return {@code true} if a new module was imported
+	 * @return {@code true} if a module was imported (or already open)
 	 */
 	public boolean tryOnDemandImport(String uri, IProgressMonitor monitor) {
 		if (!active) {
 			return false;
 		}
-		// ex: uri = "file:///home/user/quarkus/core/src/main/java/Foo.java"
-		// Try each importer in order until one handles the file
 		for (IProjectImporter importer : importers) {
 			try {
-				// ex: MavenProjectImporter finds pom.xml → imports the module → returns [project]
-				// ex: GradleProjectImporter finds no build.gradle → returns []
 				List<IProject> imported = importer.importOnDemand(uri, monitor);
 				if (!imported.isEmpty()) {
-					// ex: notify client that [quarkus-core] was imported → Java Projects view updates
 					notifyProjectsImported(imported);
 					return true;
 				}
@@ -146,9 +250,13 @@ public class OnDemandImportManager {
 				JavaLanguageServerPlugin.logException("On-demand import failed for " + uri, e);
 			}
 		}
-		// No importer handled the file (e.g. file outside any build system)
+		IFile file = JDTUtils.findFile(uri);
+		if (file != null && file.getProject().isOpen()) {
+			return true;
+		}
 		return false;
 	}
+
 
 	private void notifyProjectsImported(List<IProject> projects) {
 		JavaLanguageClient client = JavaLanguageServerPlugin.getProjectsManager().getConnection();
