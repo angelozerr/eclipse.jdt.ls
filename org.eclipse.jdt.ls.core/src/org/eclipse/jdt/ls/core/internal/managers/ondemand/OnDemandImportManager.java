@@ -28,6 +28,7 @@ import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.jdt.core.IClassFile;
@@ -41,6 +42,9 @@ import org.eclipse.jdt.ls.core.internal.JavaLanguageServerPlugin;
 import org.eclipse.jdt.ls.core.internal.ProjectUtils;
 import org.eclipse.jdt.ls.core.internal.handlers.DocumentLifeCycleHandler;
 import org.eclipse.jdt.ls.core.internal.managers.ProjectsManager;
+import org.eclipse.m2e.core.embedder.IMaven;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.FrameworkUtil;
 
 /**
  * Centralized manager for on-demand project import.
@@ -292,6 +296,30 @@ public class OnDemandImportManager {
 	}
 
 	/**
+	 * Deletes m2e's {@code workspaceState.ser} so the project registry starts
+	 * empty. Without this, m2e retains cached {@code MavenProjectFacade}
+	 * entries for closed projects, causing dependencies to resolve as project
+	 * references to closed projects instead of JARs from {@code .m2/repository}.
+	 */
+	private void deleteMavenWorkspaceState() {
+		try {
+			Bundle bundle = FrameworkUtil.getBundle(IMaven.class);
+			if (bundle == null) {
+				return;
+			}
+			IPath statePath = Platform.getStateLocation(bundle);
+			File workspaceStateFile = new File(statePath.toFile(), "workspaceState.ser");
+			if (workspaceStateFile.exists()) {
+				if (workspaceStateFile.delete()) {
+					JavaLanguageServerPlugin.logInfo("On-demand shutdown: deleted m2e workspaceState.ser");
+				}
+			}
+		} catch (Exception e) {
+			JavaLanguageServerPlugin.logException("Failed to delete m2e workspaceState.ser", e);
+		}
+	}
+
+	/**
 	 * Closes all on-demand imported projects before workspace save on shutdown.
 	 *
 	 * <p>This prevents the next session from loading stale projects at startup.</p>
@@ -303,6 +331,7 @@ public class OnDemandImportManager {
 			return;
 		}
 		closeProjects(rootPaths, monitor, "On-demand shutdown cleanup");
+		deleteMavenWorkspaceState();
 	}
 
 	private void closeProjects(Collection<IPath> rootPaths, IProgressMonitor monitor, String context) {
