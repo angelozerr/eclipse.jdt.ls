@@ -133,6 +133,10 @@ public class CodeActionHandler {
 	}
 
 	public List<Either<Command, CodeAction>> getCodeActionCommands(CodeActionParams params, IProgressMonitor monitor) {
+		return getCodeActionCommands(params, ConfigurationHandler.getFormattingOptions(params.getTextDocument().getUri()), monitor);
+	}
+
+	public List<Either<Command, CodeAction>> getCodeActionCommands(CodeActionParams params, Map<String, Object> formattingOptions, IProgressMonitor monitor) {
 		if (monitor.isCanceled()) {
 			return Collections.emptyList();
 		}
@@ -141,7 +145,6 @@ public class CodeActionHandler {
 			return Collections.emptyList();
 		}
 
-		Map<String, Object> formattingOptions = ConfigurationHandler.getFormattingOptions(params.getTextDocument().getUri());
 		if (formattingOptions != null && !formattingOptions.isEmpty()) {
 			Object tabSizeValue = formattingOptions.get(Preferences.JAVA_CONFIGURATION_TABSIZE);
 			Object insertSpacesValue = formattingOptions.get(Preferences.JAVA_CONFIGURATION_INSERTSPACES);

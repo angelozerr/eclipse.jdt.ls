@@ -111,7 +111,6 @@ public final class WorkspaceDiagnosticsHandler implements IResourceChangeListene
 		} catch (CoreException e) {
 			JavaLanguageServerPlugin.logException("failed to send diagnostics", e);
 		}
-
 	}
 
 	/*

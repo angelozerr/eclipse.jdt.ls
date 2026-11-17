@@ -349,16 +349,32 @@ public abstract class BaseDocumentLifeCycleHandler {
 		String uri = params.getTextDocument().getUri();
 		documentVersions.put(uri, params.getTextDocument().getVersion());
 		lastSyncedDocumentLengths.remove(params.getTextDocument().getUri());
+		// asyncDidOpen is called first — before any workspace/JDT access — so subclasses
+		// can dispatch to a background thread without risk of blocking on a workspace write
+		// lock (e.g. held by a concurrent project.open() call).
+		if (asyncDidOpen(params)) {
+			return;
+		}
 		IFile resource = JDTUtils.findFile(uri);
-		if (resource != null) { // Open a managed file from the existing projects.
+		if (resource != null && resource.getProject().isOpen()) { // Open a managed file from an open project.
 			handleOpen(params);
-		} else { // Open an unmanaged file, use a workspace runnable to mount it to default project or invisible project.
+		} else { // Open an unmanaged file or a file from a closed project.
 			try {
 				ResourcesPlugin.getWorkspace().run((IWorkspaceRunnable) monitor -> handleOpen(params), null, IWorkspace.AVOID_UPDATE, new NullProgressMonitor());
 			} catch (CoreException e) {
 				JavaLanguageServerPlugin.logException("Handle document open ", e);
 			}
 		}
+	}
+
+	/**
+	 * Hook for subclasses to handle didOpen asynchronously on a background thread.
+	 * Called before any workspace/JDT access so it can safely return {@code true}
+	 * even when a workspace write lock is held. Return {@code true} to skip the
+	 * synchronous workspace path; {@code false} to use it.
+	 */
+	protected boolean asyncDidOpen(DidOpenTextDocumentParams params) {
+		return false;
 	}
 
 	public void didChange(DidChangeTextDocumentParams params) {

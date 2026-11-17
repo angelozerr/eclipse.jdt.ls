@@ -213,6 +213,10 @@ public class JavaClientConnection {
 		return this.client.configuration(configurationParams).join();
 	}
 
+	public CompletableFuture<List<Object>> configurationAsync(ConfigurationParams configurationParams) {
+		return this.client.configuration(configurationParams);
+	}
+
 	public CompletableFuture<Void> refreshInlayHints() {
 		return this.client.refreshInlayHints();
 	}

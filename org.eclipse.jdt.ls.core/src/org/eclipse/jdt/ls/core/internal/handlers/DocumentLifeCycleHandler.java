@@ -19,6 +19,7 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.jdt.core.ICompilationUnit;
 import org.eclipse.jdt.ls.core.internal.JDTUtils;
 import org.eclipse.jdt.ls.core.internal.JavaClientConnection;
@@ -28,6 +29,7 @@ import org.eclipse.jdt.ls.core.internal.managers.InvisibleProjectImporter;
 import org.eclipse.jdt.ls.core.internal.managers.ondemand.OnDemandImportManager;
 import org.eclipse.jdt.ls.core.internal.managers.ProjectsManager;
 import org.eclipse.jdt.ls.core.internal.preferences.PreferenceManager;
+import org.eclipse.lsp4j.DidOpenTextDocumentParams;
 
 public class DocumentLifeCycleHandler extends BaseDocumentLifeCycleHandler {
 
@@ -89,5 +91,22 @@ public class DocumentLifeCycleHandler extends BaseDocumentLifeCycleHandler {
 		}
 
 		return unit;
+	}
+
+	@Override
+	protected boolean asyncDidOpen(DidOpenTextDocumentParams params) {
+		if (!onDemandImportManager.isActive()) {
+			return false;
+		}
+		// Always handle on a background thread in on-demand mode: avoids blocking the
+		// lsp4j reader thread on workspace write locks held by a concurrent project.open().
+		// Not in DOCUMENT_LIFE_CYCLE_JOBS so waitForLifecycleJobs() doesn't block requests
+		// during import — requests return immediately (possibly empty); once import finishes,
+		// triggerValidation() publishes diagnostics and VS Code refreshes.
+		Job job = Job.create("On-demand open: " + params.getTextDocument().getUri(), monitor -> {
+			handleOpen(params);
+		});
+		job.schedule();
+		return true;
 	}
 }

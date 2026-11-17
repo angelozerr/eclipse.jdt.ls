@@ -13,21 +13,21 @@
 package org.eclipse.jdt.ls.core.internal;
 
 import java.io.File;
+import java.io.FileDescriptor;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.net.Socket;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.AsynchronousFileChannel;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.channels.WritableByteChannel;
-import java.nio.file.StandardOpenOption;
 import java.util.Optional;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
 import java.util.stream.Stream;
 
 import org.eclipse.core.runtime.Platform;
@@ -84,6 +84,8 @@ public class ConnectionStreamFactory {
 
 		private InputStream input;
 		private OutputStream output;
+		// Held to prevent GC from closing the FileDescriptor before the streams do.
+		private RandomAccessFile randomAccessFile;
 
 		public PipeStreamProvider() {
 			initializeNamedPipe();
@@ -104,9 +106,13 @@ public class ConnectionStreamFactory {
 			if (pipeFile != null) {
 				if (isWindows()) {
 					try {
-						AsynchronousFileChannel channel = AsynchronousFileChannel.open(pipeFile.toPath(), StandardOpenOption.READ, StandardOpenOption.WRITE);
-						input = new NamedPipeInputStream(channel);
-						output = new NamedPipeOutputStream(channel);
+						// AsynchronousFileChannel with concurrent reads and writes on the same
+						// Windows named pipe HANDLE causes IOCP completions to stall. Use
+						// blocking I/O so reads and writes are independent on the same HANDLE.
+						randomAccessFile = new RandomAccessFile(pipeFile, "rw");
+						FileDescriptor fd = randomAccessFile.getFD();
+						input = new FileInputStream(fd);
+						output = new FileOutputStream(fd);
 					} catch (IOException e) {
 						JavaLanguageServerPlugin.logException(e.getMessage(), e);
 					}
@@ -147,17 +153,12 @@ public class ConnectionStreamFactory {
 
 	public class NamedPipeInputStream extends InputStream {
 
-		private ReadableByteChannel unixChannel;
-		private AsynchronousFileChannel winChannel;
-		private ByteBuffer buffer = ByteBuffer.allocate(1024);
+		private final ReadableByteChannel unixChannel;
+		private final ByteBuffer buffer = ByteBuffer.allocate(1024);
 		private int readyBytes = 0;
 
 		public NamedPipeInputStream(ReadableByteChannel channel) {
 			this.unixChannel = channel;
-		}
-
-		public NamedPipeInputStream(AsynchronousFileChannel channel) {
-			this.winChannel = channel;
 		}
 
 		@Override
@@ -165,36 +166,23 @@ public class ConnectionStreamFactory {
 			if (buffer.position() < readyBytes) {
 				return buffer.get() & 0xFF;
 			}
-			try {
-				buffer.clear();
-				if (winChannel != null) {
-					readyBytes = winChannel.read(buffer, 0).get();
-				} else {
-					readyBytes = unixChannel.read(buffer);
-				}
-				if (readyBytes == -1) {
-					return -1; // EOF
-				}
-				buffer.flip();
-				return buffer.get() & 0xFF;
-			} catch (InterruptedException | ExecutionException e) {
-				throw new IOException(e);
+			buffer.clear();
+			readyBytes = unixChannel.read(buffer);
+			if (readyBytes == -1) {
+				return -1;
 			}
+			buffer.flip();
+			return buffer.get() & 0xFF;
 		}
 	}
 
 	public class NamedPipeOutputStream extends OutputStream {
 
-		private WritableByteChannel unixChannel;
-		private AsynchronousFileChannel winChannel;
-		private ByteBuffer buffer = ByteBuffer.allocate(1);
+		private final WritableByteChannel unixChannel;
+		private final ByteBuffer buffer = ByteBuffer.allocate(1);
 
 		public NamedPipeOutputStream(WritableByteChannel channel) {
 			this.unixChannel = channel;
-		}
-
-		public NamedPipeOutputStream(AsynchronousFileChannel channel) {
-			this.winChannel = channel;
 		}
 
 		@Override
@@ -202,16 +190,7 @@ public class ConnectionStreamFactory {
 			buffer.clear();
 			buffer.put((byte) b);
 			buffer.position(0);
-			if (winChannel != null) {
-				Future<Integer> result = winChannel.write(buffer, 0);
-				try {
-					result.get();
-				} catch (Exception e) {
-					throw new IOException(e);
-				}
-			} else {
-				unixChannel.write(buffer);
-			}
+			unixChannel.write(buffer);
 		}
 
 		@Override
@@ -226,17 +205,7 @@ public class ConnectionStreamFactory {
 					break;
 				}
 				writeBytes += length;
-				ByteBuffer buffer = ByteBuffer.wrap(b, offset, length);
-				if (winChannel != null) {
-					Future<Integer> result = winChannel.write(buffer, 0);
-					try {
-						result.get();
-					} catch (Exception e) {
-						throw new IOException(e);
-					}
-				} else {
-					unixChannel.write(buffer);
-				}
+				unixChannel.write(ByteBuffer.wrap(b, offset, length));
 			}
 		}
 	}

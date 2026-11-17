@@ -281,8 +281,14 @@ final public class InitHandler extends BaseInitHandler {
 				};
 				try {
 					start = System.currentTimeMillis();
-					JobHelpers.waitForRepositoryRegistryUpdateJob();
-					JavaLanguageServerPlugin.logInfo("RepositoryRegistryUpdateJob finished " + (System.currentTimeMillis() - start) + "ms");
+					if (preferences.getImportMode() != ImportMode.ON_DEMAND) {
+						// In full mode, wait for m2e's repository registry to be ready before
+						// importing Maven projects. In on-demand mode this wait is skipped:
+						// the registry update job runs concurrently and will finish before
+						// the user triggers the first on-demand import.
+						JobHelpers.waitForRepositoryRegistryUpdateJob();
+						JavaLanguageServerPlugin.logInfo("RepositoryRegistryUpdateJob finished " + (System.currentTimeMillis() - start) + "ms");
+					}
 					resetBuildState = ProjectsManager.interruptAutoBuild();
 					if (preferences.getImportMode() == ImportMode.ON_DEMAND) {
 						// On-demand mode: register importers without importing any project.

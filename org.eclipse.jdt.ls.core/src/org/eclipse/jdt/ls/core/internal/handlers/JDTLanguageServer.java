@@ -658,15 +658,17 @@ public class JDTLanguageServer extends BaseJDTLanguageServer implements Language
 			Object result = commandHandler.executeCommand(params, new NullProgressMonitor());
 			return CompletableFuture.completedFuture(result);
 		} else {
-			// see https://github.com/redhat-developer/vscode-java/issues/3926
-			// Skip waitForIndex for commands that don't need the search index,
-			// so they can return results during long-running project imports.
-			if (!INDEX_INDEPENDENT_COMMANDS.contains(params.getCommand())) {
-				if (JavaModelManager.getIndexManager() != null) {
-					JavaModelManager.getIndexManager().waitForIndex(true, null);
-				}
-			}
 			return computeAsyncWithClientProgress((monitor) -> {
+				// see https://github.com/redhat-developer/vscode-java/issues/3926
+				// Skip waitForIndex for commands that don't need the search index,
+				// so they can return results during long-running project imports.
+				// waitForIndex must run inside computeAsyncWithClientProgress, not before it,
+				// to avoid blocking the lsp4j reader thread during long-running indexing.
+				if (!INDEX_INDEPENDENT_COMMANDS.contains(params.getCommand())) {
+					if (JavaModelManager.getIndexManager() != null) {
+						JavaModelManager.getIndexManager().waitForIndex(true, null);
+					}
+				}
 				return commandHandler.executeCommand(params, monitor);
 			});
 		}
@@ -823,10 +825,17 @@ public class JDTLanguageServer extends BaseJDTLanguageServer implements Language
 		CodeActionHandler handler = new CodeActionHandler(this.preferenceManager);
 		return computeAsync((monitor) -> {
 			waitForLifecycleJobs(monitor);
+			// Fetch before the lock — workspace/configuration roundtrip must not hold
+			// codeActionLock and block other codeAction requests. join() here runs on a
+			// ForkJoin managed thread (compensated block), not on pool-1-thread-1.
 			// see https://github.com/eclipse-jdtls/eclipse.jdt.ls/issues/2799
-			// Optimize the performance of the code actions
+			Map<String, Object> formattingOptions = ConfigurationHandler.getFormattingOptionsAsync(
+					params.getTextDocument().getUri()).join();
+			if (monitor.isCanceled()) {
+				return Collections.emptyList();
+			}
 			synchronized (codeActionLock) {
-				return handler.getCodeActionCommands(params, monitor);
+				return handler.getCodeActionCommands(params, formattingOptions, monitor);
 			}
 		});
 	}

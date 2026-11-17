@@ -208,17 +208,22 @@ public abstract class AbstractProjectImporter implements IProjectImporter {
 	private IModuleIndex getOrCreateIndex() {
 		IModuleIndex index = moduleIndex;
 		if (index == null) {
+			boolean created = false;
 			synchronized (this) {
 				index = moduleIndex;
 				if (index == null) {
 					index = createModuleIndex();
 					moduleIndex = index;
-					if (index != null) {
-						JavaLanguageServerPlugin.logInfo("On-demand index created: "
-								+ getClass().getSimpleName()
-								+ " (" + index.getModuleCount() + " modules indexed)");
-					}
+					created = (index != null);
 				}
+			}
+			// Log outside the synchronized block: logInfo() routes through Eclipse's logging
+			// infrastructure to StreamMessageConsumer, which is a contended lock. Holding
+			// the importer lock while waiting for StreamMessageConsumer delays other threads.
+			if (created) {
+				JavaLanguageServerPlugin.logInfo("On-demand index created: "
+						+ getClass().getSimpleName()
+						+ " (" + index.getModuleCount() + " modules indexed)");
 			}
 		}
 		return index;
